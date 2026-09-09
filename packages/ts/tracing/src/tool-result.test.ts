@@ -82,4 +82,39 @@ describe("toolResultError", () => {
       }),
     ).toBe("Error: Payment method should be the original payment method");
   });
+
+  it("treats success: false payloads as tool failures", () => {
+    expect(
+      toolResultError({
+        success: false,
+        message: "API rate limit reached",
+      }),
+    ).toBe("API rate limit reached");
+    expect(
+      toolResultError({
+        success: false,
+        error: "Unauthorized",
+      }),
+    ).toBe("Unauthorized");
+    expect(toolResultError({ success: true, message: "Completed" })).toBeNull();
+  });
+
+  it("treats status: error and status: failed payloads as tool failures", () => {
+    expect(
+      toolResultError({
+        status: "error",
+        message: "Connection refused",
+      }),
+    ).toBe("Connection refused");
+    expect(
+      toolResultError({
+        status: "failed",
+        error: "Job timed out",
+      }),
+    ).toBe("Job timed out");
+    expect(
+      toolResultError({ status: "success", message: "Operation successful" }),
+    ).toBeNull();
+  });
 });
+
