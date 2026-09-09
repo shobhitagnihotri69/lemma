@@ -115,12 +115,13 @@ def _debug_span_summary(
 
 
 def _serialize_attribute(value: Any) -> Any:
-    if value is None or isinstance(value, str | int | float | bool):
+    if value is None or isinstance(value, (str, int, float, bool)):
         return value
     try:
         return json.dumps(value, separators=(",", ":"))
     except TypeError:
         return str(value)
+
 
 
 def _add_defined(attributes: dict[str, Any], key: str, value: Any) -> None:
@@ -394,6 +395,83 @@ class TraceContext:
 
     def span_handle(self, span_id: str) -> SpanHandle | None:
         return self._handles.get(span_id)
+
+    def total_token_usage(self) -> dict[str, int | float] | None:
+        """Aggregate token usage across all spans in the trace.
+
+        Returns a dictionary summing input_tokens, output_tokens,
+        cache_read_input_tokens, cache_creation_input_tokens,
+        reasoning_output_tokens, and total_tokens across all spans.
+        Returns None if no spans contain token usage information.
+        """
+        totals: dict[str, int | float] = {}
+        has_usage = False
+
+        usage_keys = (
+            "input_tokens",
+            "output_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+            "reasoning_output_tokens",
+        )
+
+        for span in self.spans:
+            usage = span.get("usage")
+            if not isinstance(usage, dict):
+                continue
+            for key in usage_keys:
+                val = usage.get(key)
+                if isinstance(val, (int, float)) and not isinstance(val, bool):
+                    totals[key] = totals.get(key, 0) + val
+                    has_usage = True
+
+        if not has_usage:
+            return None
+
+        input_tokens = totals.get("input_tokens", 0)
+        output_tokens = totals.get("output_tokens", 0)
+        totals["total_tokens"] = input_tokens + output_tokens
+        return totals
+
+    def span_depth(self, span_id: str) -> int:
+        """Calculate the nesting depth of a specific span.
+
+        Root spans (no parent_id or parent not found) have depth 1.
+        Children have depth 2, etc. Safely guards against circular references.
+        """
+        span_map = {s.get("id"): s for s in self.spans if s.get("id")}
+        visited: set[str] = set()
+        curr_id: str | None = span_id
+        depth = 0
+
+        while curr_id and curr_id in span_map:
+            if curr_id in visited:
+                break
+            visited.add(curr_id)
+            depth += 1
+            curr_id = span_map[curr_id].get("parent_id")
+
+        return depth
+
+    def max_span_depth(self) -> int:
+        """Compute the maximum span nesting/recursion depth in the trace.
+
+        Returns 0 if the trace contains no spans.
+        """
+        if not self.spans:
+            return 0
+        return max((self.span_depth(span.get("id")) for span in self.spans if span.get("id")), default=0)
+
+    def is_runaway_loop(self, max_depth_threshold: int = 25, max_spans_threshold: int = 100) -> bool:
+        """Determine whether the trace exhibits runaway recursive loop behavior.
+
+        Checks whether the maximum span depth exceeds max_depth_threshold or
+        the total number of recorded spans exceeds max_spans_threshold.
+        """
+        if len(self.spans) > max_spans_threshold:
+            return True
+        return self.max_span_depth() > max_depth_threshold
+
 
     def _debug_span(self, event: str, span: dict[str, Any]) -> None:
         _lemma_debug(

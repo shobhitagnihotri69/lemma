@@ -1001,3 +1001,79 @@ def test_trace_does_not_resend_a_successful_run_as_a_failed_one():
     assert bodies[0]["trace"].get("status") is None
     assert bodies[0]["trace"].get("error") is None
     assert bodies[0]["trace"]["output"] == "ok"
+
+
+def test_trace_context_total_token_usage_aggregates_multiple_spans():
+    ctx = TraceContext(name="multi-agent-run")
+    assert ctx.total_token_usage() is None
+
+    # First LLM call
+    ctx.record_generation(
+        name="planner",
+        input="plan user query",
+        output="step 1",
+        input_tokens=150,
+        output_tokens=50,
+        reasoning_output_tokens=20,
+    )
+    # Second LLM call
+    ctx.record_generation(
+        name="executor",
+        input="execute step 1",
+        output="result",
+        input_tokens=200,
+        output_tokens=100,
+    )
+    # Non-token tool span
+    ctx.record_tool(
+        name="web_search",
+        input={"q": "test"},
+        output="ok",
+    )
+
+    totals = ctx.total_token_usage()
+    assert totals is not None
+    assert totals["input_tokens"] == 350
+    assert totals["output_tokens"] == 150
+    assert totals["reasoning_output_tokens"] == 20
+    assert totals["total_tokens"] == 500
+
+
+def test_trace_context_span_depth_and_max_depth():
+    ctx = TraceContext(name="agent-tree")
+    assert ctx.max_span_depth() == 0
+
+    # Root span: depth 1
+    ctx.record_span(name="root", id="span-root")
+    assert ctx.span_depth("span-root") == 1
+    assert ctx.max_span_depth() == 1
+
+    # Child span: depth 2
+    ctx.record_span(name="tool-call", id="span-child", parent_id="span-root")
+    assert ctx.span_depth("span-child") == 2
+    assert ctx.max_span_depth() == 2
+
+    # Grandchild span: depth 3
+    ctx.record_span(name="sub-tool", id="span-grandchild", parent_id="span-child")
+    assert ctx.span_depth("span-grandchild") == 3
+    assert ctx.max_span_depth() == 3
+
+
+def test_trace_context_is_runaway_loop_detection():
+    ctx = TraceContext(name="loop-test")
+    assert not ctx.is_runaway_loop()
+
+    # Create nested chain of 5 spans
+    last_id = "root"
+    ctx.record_span(name="span-0", id=last_id)
+    for i in range(1, 6):
+        curr_id = f"span-{i}"
+        ctx.record_span(name=f"sub-{i}", id=curr_id, parent_id=last_id)
+        last_id = curr_id
+
+    assert ctx.max_span_depth() == 6
+    # Exceeds threshold of 5
+    assert ctx.is_runaway_loop(max_depth_threshold=5)
+    # Within threshold of 10
+    assert not ctx.is_runaway_loop(max_depth_threshold=10)
+
