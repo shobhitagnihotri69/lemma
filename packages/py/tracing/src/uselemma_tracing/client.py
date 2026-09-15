@@ -289,11 +289,16 @@ class SpanHandle:
             )
             or self.usage
         )
+        # Shallow-merge open-time and end-time dicts: open-time keys serve as
+        # the baseline, end-time keys win on conflict, and open-time keys that
+        # end() does not mention are preserved.
+        end_attrs = kwargs.get("attributes")
+        end_meta = kwargs.get("metadata")
         merged = {
             "name": self.name,
             "input": self.input,
-            "metadata": self.metadata,
-            "attributes": self.attributes,
+            "metadata": {**self.metadata, **end_meta} if self.metadata and end_meta else (end_meta or self.metadata),
+            "attributes": {**self.attributes, **end_attrs} if self.attributes and end_attrs else (end_attrs or self.attributes),
             "model": self.model,
             "tool_name": self.tool_name,
             "user_facing_message": self.user_facing_message,
@@ -306,15 +311,11 @@ class SpanHandle:
             "type": self.type,
             "started_at": self.started_at,
             **self.open_kwargs,
-            **kwargs,
+            **{k: v for k, v in kwargs.items() if k not in ("attributes", "metadata")},
             "usage": resolved_usage,
             "ended_at": kwargs.get("ended_at") or _now(),
             "open_span": False,
         }
-        if merged.get("metadata") is None:
-            merged["metadata"] = self.metadata
-        if merged.get("attributes") is None:
-            merged["attributes"] = self.attributes
         if not merged.get("model"):
             merged["model"] = self.model
         if not merged.get("tool_name"):
