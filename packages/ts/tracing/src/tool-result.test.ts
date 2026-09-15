@@ -116,5 +116,19 @@ describe("toolResultError", () => {
       toolResultError({ status: "success", message: "Operation successful" }),
     ).toBeNull();
   });
-});
 
+  it("extracts structuredContent.error from flagged success/status failures", () => {
+    expect(
+      toolResultError({
+        success: false,
+        structuredContent: { error: "Rate limit exceeded" },
+      }),
+    ).toBe("Rate limit exceeded");
+    expect(
+      toolResultError({
+        status: "error",
+        structuredContent: { error: "Connection refused" },
+      }),
+    ).toBe("Connection refused");
+  });
+});

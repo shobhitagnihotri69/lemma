@@ -16,6 +16,8 @@ export function toolResultError(output: unknown): string | null {
     if (flaggedError) return flaggedError;
     const message = nonEmptyString(record.message);
     if (message) return message;
+    const encoded = encodedPayloadError(record);
+    if (encoded) return encoded;
     try {
       return JSON.stringify(record);
     } catch {
@@ -31,9 +33,9 @@ function isFlaggedFailure(record: Record<string, unknown>): boolean {
     record.isError === true ||
     record.is_error === true ||
     record.error === true ||
-    record.success === false ||
     record.status === "error" ||
-    record.status === "failed"
+    record.status === "failed" ||
+    record.success === false
   );
 }
 

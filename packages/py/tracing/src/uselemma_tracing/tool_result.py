@@ -30,6 +30,9 @@ def tool_result_error(output: Any) -> str | None:
         message = _non_empty_string(record.get("message"))
         if message:
             return message
+        encoded = _encoded_payload_error(record)
+        if encoded:
+            return encoded
         try:
             return json.dumps(record, default=str)
         except TypeError:

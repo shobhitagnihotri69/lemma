@@ -120,3 +120,23 @@ def test_tool_result_error_status_error_and_failed_payload():
     )
     assert tool_result_error({"status": "success", "message": "Operation successful"}) is None
 
+
+def test_tool_result_error_flagged_failure_uses_structured_content():
+    assert (
+        tool_result_error(
+            {
+                "success": False,
+                "structuredContent": {"error": "Rate limit exceeded"},
+            }
+        )
+        == "Rate limit exceeded"
+    )
+    assert (
+        tool_result_error(
+            {
+                "status": "error",
+                "structuredContent": {"error": "Connection refused"},
+            }
+        )
+        == "Connection refused"
+    )
