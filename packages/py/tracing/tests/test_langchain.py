@@ -555,6 +555,58 @@ def test_langchain_fails_root_for_message_less_exceptions():
     assert body["trace"]["spans"][0]["error"] == "ValueError"
 
 
+def test_retriever_error_finalizes_deferred_owner_trace():
+    calls = []
+    handler = langchain(
+        api_key="key",
+        project_id=PROJECT_ID,
+        transport=make_transport(calls),
+    )
+
+    handler.on_llm_start(
+        {
+            "id": ["langchain", "chat_models", "openai", "ChatOpenAI"],
+            "kwargs": {"model": "gpt-4o"},
+        },
+        ["find docs"],
+        run_id="llm-root",
+    )
+    handler.on_llm_end(
+        {
+            "generations": [
+                [
+                    {
+                        "message": {
+                            "type": "ai",
+                            "content": "searching",
+                            "tool_calls": [{"id": "c1", "name": "search", "args": {}}],
+                        }
+                    }
+                ]
+            ]
+        },
+        run_id="llm-root",
+    )
+    assert calls == []
+
+    handler.on_retriever_start(
+        {"name": "doc-retriever"}, "test query", run_id="retriever-1", parent_run_id="llm-root"
+    )
+    handler.on_retriever_error(RuntimeError("retrieval failed"), run_id="retriever-1")
+
+    assert len(calls) == 1
+    body = calls[0]["body"]
+    assert body["trace"]["status"] == "ERROR"
+    assert body["trace"]["error"] == "RuntimeError: retrieval failed"
+    spans = body["trace"]["spans"]
+    assert len(spans) == 2
+    assert spans[0]["type"] == "generation"
+    assert spans[1]["type"] == "span"
+    assert spans[1]["name"] == "doc-retriever"
+    assert spans[1]["status"] == "ERROR"
+    assert spans[1]["error"] == "RuntimeError: retrieval failed"
+
+
 def test_langchain_records_is_error_tool_end_as_error_without_output():
     calls = []
     handler = langchain(

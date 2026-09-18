@@ -1460,7 +1460,10 @@ class LemmaLangChainCallbackHandler(_CallbackHandlerBase):
             self._note_bounds(stored, run.started_at, ended_at)
             if run.owns_trace:
                 self._note_root_error(stored, message)
-        self._maybe_finalize_owner(run, ended_at)
+        if run.owns_trace:
+            self._maybe_finalize_owner(run, ended_at)
+            return
+        self._finalize_deferred_owner(run.owning_trace_id, ended_at, message)
 
     def flush(self) -> None:
         """Finalize all open owned traces (idempotent; does not resend)."""
