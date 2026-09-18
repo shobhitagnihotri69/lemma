@@ -6,6 +6,7 @@ from typing import Any
 
 from .client import Lemma, SpanHandle, TraceContext, _duration_ms, _now
 from .error_message import describe_error
+from .langsmith_parent import resolve_traceable_ghost
 from .model import pick_generation_model_identity, pick_model_identity
 from .tool_result import tool_result_error
 from .usage import normalize_token_usage
@@ -724,7 +725,17 @@ class LemmaLangChainCallbackHandler(_CallbackHandlerBase):
     def _parent_run(self, parent_run_id: str | None) -> _StoredRun | None:
         if parent_run_id is None:
             return None
-        return self._runs.get(str(parent_run_id))
+        pid = str(parent_run_id)
+        stored = self._runs.get(pid)
+        if stored is not None:
+            return stored
+        ancestor_id = resolve_traceable_ghost(parent_run_id, self._runs)
+        if ancestor_id is None:
+            return None
+        stored = self._runs[ancestor_id]
+        # Alias the LangSmith-only ghost so later callbacks resolve in one hop.
+        self._runs[pid] = stored
+        return stored
 
     def _resolve_attachment(
         self,
