@@ -131,6 +131,28 @@ def test_dedup_leaves_distinct_child_input():
     assert payload["trace"]["spans"][1]["input"] == "two"
 
 
+def test_dedup_replaces_input_identical_to_root_trace():
+    payload = _payload(
+        [
+            {
+                "id": "child-of-trace",
+                "parent_id": "trace-1",
+                "name": "root_span",
+                "input": "hello",
+            },
+        ],
+        input_value="hello",
+    )
+    apply_span_content_dedup(payload)
+    assert payload["trace"]["spans"][0]["input"] == {
+        "__lemma_deduplicated__": True,
+        "identical_to": "parent.input",
+        "parent_id": "trace-1",
+    }
+
+
+
+
 def test_payload_cap_ledger_stays_under_budget_with_many_fields():
     spans = [
         {

@@ -297,3 +297,65 @@ def test_attached_end_keeps_start_llm_fields():
     assert end_record["llmSystem"] == "openai"
     assert end_record["llmPromptTemplate"] == "Say {x}"
     assert end_record["output"] == "hello"
+
+
+def test_journal_record_with_parent_span_id_resolves_parent():
+    calls = []
+    host = _host(calls)
+    turn = host.start_turn("agent-turn", id="trace-1")
+    sandbox = turn.start_span(name="sandbox", id="sandbox-1")
+    turn.apply(
+        {
+            "token": {"version": 1, "traceId": "trace-1"},
+            "records": [
+                {
+                    "op": "record",
+                    "id": "tool-1",
+                    "name": "search",
+                    "type": "tool",
+                    "parentSpanId": "sandbox-1",
+                    "startedAt": "2026-09-03T00:00:01.000Z",
+                    "endedAt": "2026-09-03T00:00:02.000Z",
+                }
+            ],
+        }
+    )
+    sandbox.end()
+    turn.end(output="ok")
+    by_id = {span["id"]: span for span in calls[0]["trace"]["spans"]}
+    assert by_id["tool-1"]["parent_id"] == "sandbox-1"
+
+
+def test_attached_end_merges_attributes_and_metadata():
+    local = attach_turn(
+        {
+            "version": 1,
+            "traceId": "trace-1",
+            "parentSpanId": "sandbox-1",
+            "startedAt": "2026-09-03T00:00:00.000Z",
+        }
+    )
+    span = local.start_span(
+        id="span-1",
+        name="task",
+        attributes={"open_attr": "yes", "shared": "open"},
+        metadata={"open_meta": "yes", "shared_meta": "open"},
+    )
+    span.end(
+        attributes={"end_attr": "ok", "shared": "end"},
+        metadata={"end_meta": "ok", "shared_meta": "end"},
+    )
+    end_record = next(
+        record for record in local.records()["records"] if record["op"] == "end"
+    )
+    assert end_record["attributes"] == {
+        "open_attr": "yes",
+        "end_attr": "ok",
+        "shared": "end",
+    }
+    assert end_record["metadata"] == {
+        "open_meta": "yes",
+        "end_meta": "ok",
+        "shared_meta": "end",
+    }
+

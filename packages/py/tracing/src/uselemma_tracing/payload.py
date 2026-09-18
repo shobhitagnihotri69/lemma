@@ -94,6 +94,8 @@ def apply_span_content_dedup(payload: dict[str, Any]) -> dict[str, Any]:
         return payload
 
     original_inputs: dict[str, Any] = {}
+    if isinstance(trace.get("id"), str):
+        original_inputs[trace["id"]] = trace.get("input")
     for span in spans:
         if isinstance(span, dict) and isinstance(span.get("id"), str):
             original_inputs[span["id"]] = span.get("input")

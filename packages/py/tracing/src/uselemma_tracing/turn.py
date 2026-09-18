@@ -79,7 +79,10 @@ def _span_kwargs(record: dict[str, Any], fallback_parent_id: str | None) -> dict
     kwargs: dict[str, Any] = {}
     for journal_key, span_key in _JOURNAL_SPAN_FIELDS:
         if journal_key == "parentId":
-            kwargs[span_key] = record.get("parentId", fallback_parent_id)
+            parent = record.get("parentId")
+            if parent is None:
+                parent = record.get("parentSpanId")
+            kwargs[span_key] = parent if parent is not None else fallback_parent_id
             continue
         if journal_key in record:
             kwargs[span_key] = record[journal_key]
@@ -199,7 +202,15 @@ class AttachedSpanHandle:
             return
         self._ended = True
         fields = _span_kwargs(self._record, self._record.get("parentId"))
+        end_attrs = kwargs.get("attributes")
+        end_meta = kwargs.get("metadata")
+        open_attrs = fields.get("attributes")
+        open_meta = fields.get("metadata")
         fields.update(kwargs)
+        if open_attrs or end_attrs:
+            fields["attributes"] = {**(open_attrs or {}), **(end_attrs or {})}
+        if open_meta or end_meta:
+            fields["metadata"] = {**(open_meta or {}), **(end_meta or {})}
         fields["id"] = self.id
         if "ended_at" not in kwargs:
             fields["ended_at"] = _now()
