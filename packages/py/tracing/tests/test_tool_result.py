@@ -140,3 +140,42 @@ def test_tool_result_error_flagged_failure_uses_structured_content():
         )
         == "Connection refused"
     )
+
+
+class _MockPydanticResult:
+    def __init__(self, data: dict) -> None:
+        self._data = data
+
+    def model_dump(self) -> dict:
+        return self._data
+
+
+class _MockTextContent:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+class _MockCustomObjectResult:
+    def __init__(self, is_error: bool, content: list) -> None:
+        self.is_error = is_error
+        self.content = content
+
+
+def test_tool_result_error_supports_pydantic_and_custom_objects():
+    pydantic_fail = _MockPydanticResult(
+        {
+            "isError": True,
+            "content": [{"type": "text", "text": "MCP validation error"}],
+        }
+    )
+    assert tool_result_error(pydantic_fail) == "MCP validation error"
+
+    custom_fail = _MockCustomObjectResult(
+        is_error=True,
+        content=[_MockTextContent("Host unreachable")],
+    )
+    assert tool_result_error(custom_fail) == "Host unreachable"
+
+    pydantic_ok = _MockPydanticResult({"isError": False, "content": []})
+    assert tool_result_error(pydantic_ok) is None
+

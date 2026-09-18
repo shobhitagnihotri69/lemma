@@ -41,6 +41,24 @@ def _pick_number(source: dict[str, Any], keys: tuple[str, ...]) -> int | float |
 def _as_dict(value: Any) -> dict[str, Any] | None:
     if isinstance(value, dict):
         return value
+    if value is not None and not isinstance(
+        value, (str, int, float, bool, list, tuple, bytes)
+    ):
+        model_dump = getattr(value, "model_dump", None) or getattr(value, "dict", None)
+        if callable(model_dump):
+            try:
+                dumped = model_dump()
+                if isinstance(dumped, dict):
+                    return dumped
+            except Exception:
+                pass
+        if hasattr(value, "__dict__"):
+            try:
+                return {
+                    k: v for k, v in vars(value).items() if not k.startswith("_")
+                }
+            except Exception:
+                pass
     return None
 
 

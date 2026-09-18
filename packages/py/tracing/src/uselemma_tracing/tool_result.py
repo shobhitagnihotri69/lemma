@@ -75,11 +75,19 @@ def _content_text(content: Any) -> str | None:
     if not isinstance(content, list):
         return None
     texts = [
-        part.get("text")
+        text
         for part in content
-        if isinstance(part, dict) and isinstance(part.get("text"), str)
+        if isinstance(
+            text := (
+                part.get("text")
+                if isinstance(part, dict)
+                else getattr(part, "text", None)
+            ),
+            str,
+        )
+        and text
     ]
-    text = "\n".join(text for text in texts if text).strip()
+    text = "\n".join(texts).strip()
     return text or None
 
 
@@ -93,13 +101,31 @@ def _non_empty_string(value: Any) -> str | None:
 def _as_result_record(output: Any) -> dict[str, Any] | None:
     if isinstance(output, dict):
         return output
-    if not isinstance(output, str):
-        return None
-    trimmed = output.strip()
-    if not trimmed.startswith("{") and not trimmed.startswith("["):
-        return None
-    try:
-        parsed = json.loads(trimmed)
-    except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
+    if isinstance(output, str):
+        trimmed = output.strip()
+        if not trimmed.startswith("{") and not trimmed.startswith("["):
+            return None
+        try:
+            parsed = json.loads(trimmed)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    if output is not None and not isinstance(
+        output, (int, float, bool, list, tuple, bytes)
+    ):
+        model_dump = getattr(output, "model_dump", None) or getattr(output, "dict", None)
+        if callable(model_dump):
+            try:
+                dumped = model_dump()
+                if isinstance(dumped, dict):
+                    return dumped
+            except Exception:
+                pass
+        if hasattr(output, "__dict__"):
+            try:
+                return {
+                    k: v for k, v in vars(output).items() if not k.startswith("_")
+                }
+            except Exception:
+                pass
+    return None

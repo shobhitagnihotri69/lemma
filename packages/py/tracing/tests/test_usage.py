@@ -98,3 +98,39 @@ def test_token_usage_attributes():
     assert attrs["llm.token_count.completion"] == 2
     assert attrs["gen_ai.usage.cache_read.input_tokens"] == 3
     assert attrs["gen_ai.usage.reasoning.output_tokens"] == 4
+
+
+class _MockPydanticUsage:
+    def __init__(self, data: dict) -> None:
+        self._data = data
+
+    def model_dump(self) -> dict:
+        return self._data
+
+
+class _MockCustomUsage:
+    def __init__(self, input_tokens: int, output_tokens: int) -> None:
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+
+
+def test_normalize_token_usage_supports_pydantic_and_custom_objects():
+    pydantic_usage = _MockPydanticUsage(
+        {
+            "prompt_tokens": 120,
+            "completion_tokens": 45,
+            "prompt_tokens_details": {"cached_tokens": 30},
+        }
+    )
+    assert normalize_token_usage(pydantic_usage) == {
+        "input_tokens": 120,
+        "output_tokens": 45,
+        "cache_read_input_tokens": 30,
+    }
+
+    custom_usage = _MockCustomUsage(input_tokens=50, output_tokens=25)
+    assert normalize_token_usage(custom_usage) == {
+        "input_tokens": 50,
+        "output_tokens": 25,
+    }
+
