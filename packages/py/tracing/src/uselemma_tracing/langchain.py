@@ -316,6 +316,25 @@ def root_trace_input(input_value: Any) -> Any:
     return input_value
 
 
+def _text_from_content_blocks(content: Any) -> str | None:
+    """Join ``type == "text"`` blocks for root-trace display.
+
+    Reasoning / thinking / OpenAI reasoning items are skipped because they
+    are not ``type == "text"``. Returns ``None`` when there is no text block
+    so callers keep the original value.
+    """
+    if not isinstance(content, list):
+        return None
+    texts = [
+        block["text"]
+        for block in content
+        if isinstance(block, dict)
+        and block.get("type") == "text"
+        and isinstance(block.get("text"), str)
+    ]
+    return "\n".join(texts) if texts else None
+
+
 def _structured_assistant_output(message: dict[str, Any]) -> Any:
     if message.get("tool_calls") is not None:
         return {
@@ -326,9 +345,18 @@ def _structured_assistant_output(message: dict[str, Any]) -> Any:
     return message.get("content")
 
 
+def _flatten_root_display(value: Any) -> Any:
+    display = _text_from_content_blocks(value)
+    return display if display is not None else value
+
+
 def root_trace_output(output: Any) -> Any:
     if output is None or isinstance(output, str):
         return output
+
+    display = _text_from_content_blocks(output)
+    if display is not None:
+        return display
 
     if isinstance(output, dict):
         if output.get("role") == "assistant" and (
@@ -341,16 +369,26 @@ def root_trace_output(output: Any) -> Any:
         for message in reversed(messages):
             normalized = normalize_message(message)
             if normalized["role"] == "assistant":
-                return _structured_assistant_output(normalized)
-        return _structured_assistant_output(normalize_message(messages[-1]))
+                return _flatten_root_display(_structured_assistant_output(normalized))
+        return _flatten_root_display(
+            _structured_assistant_output(normalize_message(messages[-1]))
+        )
 
     if isinstance(output, dict):
         for key in ("output", "answer", "result", "text", "content"):
             value = output.get(key)
             if isinstance(value, str) and value:
                 return value
-            if isinstance(value, dict) and isinstance(value.get("content"), str):
-                return value["content"]
+            display = _text_from_content_blocks(value)
+            if display is not None:
+                return display
+            if isinstance(value, dict):
+                nested = value.get("content")
+                if isinstance(nested, str):
+                    return nested
+                nested_display = _text_from_content_blocks(nested)
+                if nested_display is not None:
+                    return nested_display
 
     return output
 
