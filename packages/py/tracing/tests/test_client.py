@@ -1216,3 +1216,51 @@ def test_deduplicate_span_content_stores_parent_reference():
 def test_rejects_non_positive_max_payload_bytes():
     with pytest.raises(ValueError, match="max_payload_bytes"):
         Lemma(api_key="key", project_id=PROJECT_ID, max_payload_bytes=0)
+
+
+def test_start_span_initializes_standard_sdk_attributes():
+    ctx = TraceContext(name="test")
+    span = ctx.start_span(name="step")
+    assert span.payload["attributes"]["lemma.sdk.language"] == "python"
+    assert span.payload["attributes"]["lemma.sdk.integration"] == "manual"
+
+
+def test_merge_sdk_user_agent_preserves_case_insensitive_user_agent():
+    from uselemma_tracing.client import _merge_sdk_user_agent
+
+    merged = _merge_sdk_user_agent({"user-agent": "custom-agent/2.0"})
+    assert merged == {"user-agent": "custom-agent/2.0"}
+    assert "User-Agent" not in merged
+
+
+def test_wrap_transport_handles_none_headers():
+    calls = []
+
+    def custom_transport(_url, _headers, _body):
+        calls.append(True)
+        return (201, "{}", None)
+
+    lemma = Lemma(
+        api_key="key",
+        project_id=PROJECT_ID,
+        transport=custom_transport,
+    )
+    res = lemma.trace("test", lambda _trace: "done")
+    assert res == "done"
+    assert len(calls) == 1
+    assert lemma._last_response_headers == {}
+
+
+def test_debug_smoke_test_handles_non_os_error_exceptions():
+    def exploding_transport(*_args):
+        raise RuntimeError("custom client crashed")
+
+    lemma = Lemma(
+        api_key="key",
+        project_id=PROJECT_ID,
+        transport=exploding_transport,
+    )
+    result = lemma.debug_smoke_test()
+    assert result["ok"] is False
+    assert any("ingest request failed" in h for h in result["hints"])
+

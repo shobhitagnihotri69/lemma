@@ -58,6 +58,9 @@ _SDK_USER_AGENT = f"uselemma-tracing/{_SDK_VERSION}"
 
 
 def _merge_sdk_user_agent(headers: dict[str, str]) -> dict[str, str]:
+    for key in headers:
+        if key.lower() == "user-agent":
+            return dict(headers)
     return {"User-Agent": _SDK_USER_AGENT, **headers}
 
 
@@ -807,7 +810,7 @@ class TraceContext:
                 "type": "span",
                 "input": input,
                 "metadata": metadata,
-                "attributes": attributes,
+                "attributes": _span_attributes(attributes),
                 "started_at": _iso(handle.started_at),
                 "ended_at": None,
             }
@@ -1086,7 +1089,7 @@ class Lemma:
                 },
                 body,
             )
-        except OSError:
+        except Exception:
             hints.append("ingest request failed (network error)")
             return {
                 "ok": False,
@@ -1444,11 +1447,11 @@ class Lemma:
             url: str, headers: dict[str, str], body: bytes
         ) -> tuple[int, str]:
             result = transport(url, _merge_sdk_user_agent(headers), body)
-            if len(result) >= 3:
+            if len(result) >= 3 and result[2]:
                 self._last_response_headers = dict(result[2])
-                return result[0], result[1]
-            self._last_response_headers = {}
-            return result
+            else:
+                self._last_response_headers = {}
+            return result[0], result[1]
 
         return wrapped
 
