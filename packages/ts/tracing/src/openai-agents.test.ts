@@ -873,4 +873,44 @@ describe("openAIAgents", () => {
       },
     });
   });
+
+  it("records explicit no-output marker on successful function span returning null/undefined", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 201 }));
+    const processor = openAIAgents({
+      apiKey: "test-api-key",
+      projectId: "10000000-0000-0000-0000-000000000001",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await processor.onTraceStart({
+      traceId: "trace_null_out",
+      name: "test-agent",
+    });
+    await processor.onSpanStart({
+      traceId: "trace_null_out",
+      spanId: "span_fn",
+      spanData: { type: "function", name: "log_event" },
+    });
+    await processor.onSpanEnd({
+      traceId: "trace_null_out",
+      spanId: "span_fn",
+      spanData: {
+        type: "function",
+        name: "log_event",
+        output: null,
+      },
+    });
+    await processor.onTraceEnd({
+      traceId: "trace_null_out",
+      name: "test-agent",
+    });
+    await processor.forceFlush();
+
+    const span = jsonBody(fetchMock.mock.calls[0]).trace.spans[0];
+    expect(span).toMatchObject({
+      name: "log_event",
+      type: "tool",
+      output: { result: "none" },
+    });
+  });
 });

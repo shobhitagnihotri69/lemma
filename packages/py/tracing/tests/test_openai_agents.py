@@ -848,3 +848,40 @@ def test_openai_agents_force_flush_does_not_raise_on_ingest_503():
     processor.on_trace_start(FakeTrace(trace_id="trace_503", name="agent"))
     processor.on_trace_end(FakeTrace(trace_id="trace_503", name="agent"))
     processor.force_flush()
+
+
+def test_openai_agents_successful_function_none_output_records_marker():
+    calls = []
+
+    def transport(_url, _headers, body):
+        calls.append(json.loads(body.decode()))
+        return 201, "{}"
+
+    lemma = Lemma(api_key="key", project_id=PROJECT_ID, transport=transport)
+    processor = openai_agents(lemma)
+    processor.on_trace_start(FakeTrace(trace_id="t1", name="agent"))
+    processor.on_span_start(
+        FakeSpan(
+            trace_id="t1",
+            span_id="s1",
+            started_at="2026-06-29T10:00:00Z",
+            span_data={"type": "function", "name": "log_event"},
+        )
+    )
+    processor.on_span_end(
+        FakeSpan(
+            trace_id="t1",
+            span_id="s1",
+            started_at="2026-06-29T10:00:00Z",
+            ended_at="2026-06-29T10:00:01Z",
+            span_data={"type": "function", "name": "log_event", "output": None},
+        )
+    )
+    processor.on_trace_end(FakeTrace(trace_id="t1", name="agent"))
+
+    span = calls[0]["trace"]["spans"][0]
+    assert span["name"] == "log_event"
+    assert span["type"] == "tool"
+    assert span["output"] == {"result": "none"}
+
+

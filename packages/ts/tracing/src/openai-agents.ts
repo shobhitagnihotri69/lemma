@@ -445,9 +445,14 @@ export function openAIAgents(
       noteRootOutput(storedTrace, parsedOutput);
     }
 
+    const recordedOutput =
+      parsedOutput == null && !errorMessage && data.type === "function"
+        ? { result: "none" }
+        : parsedOutput;
+
     handle.end({
       // Failures must not invent an output — record error instead.
-      output: parsedOutput,
+      output: recordedOutput,
       error: errorMessage,
       status: errorMessage ? "ERROR" : undefined,
       model: pickModelIdentity(data),

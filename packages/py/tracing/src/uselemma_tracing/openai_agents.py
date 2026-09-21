@@ -563,9 +563,14 @@ class LemmaOpenAIAgentsProcessor:
 
         # Prefer the original string timestamp so payload ISO matches the SDK.
         ended_at_value = raw_ended_at if raw_ended_at is not None else span_ended_at
+        recorded_output = (
+            {"result": "none"}
+            if output is None and not error_message and span_type == "function"
+            else output
+        )
         handle.end(
             # Failures must not invent an output — record error instead.
-            output=output,
+            output=recorded_output,
             error=error_message,
             status="ERROR" if error_message else None,
             model=pick_model_identity(data),
