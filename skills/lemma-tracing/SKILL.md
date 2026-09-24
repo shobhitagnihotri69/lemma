@@ -7,7 +7,7 @@ description: >-
   Agents SDK, LangChain, LangGraph, Langfuse side-by-side installs, or
   debugging Lemma trace delivery and trace shape.
 metadata:
-  version: 1.0.0
+  version: 1.1.0
 ---
 
 # Lemma Tracing
@@ -30,6 +30,7 @@ Every integration must satisfy this product contract:
 
 - One agent execution becomes one Lemma root trace.
 - The root trace has a stable `name`, user input, final output or error, and `threadId` / `userId` when available.
+- When the user supplies an agent name (Lemma's onboarding prompt does: "Name the agent `…`"), that exact string is the root trace `name` — the `functionId` / `agentName` / `agent_name` / `name` the integration reads. Lemma files the agent's context and artifacts under it, so do not rename or restyle it. The precedence between a user-supplied name, existing instrumentation, and names already in Lemma is owned by [lemma-artifacts › discover › The agent's name](../lemma-artifacts/references/discover.md#the-agents-name).
 - LLM calls are generation children: `recordGeneration(...)` / `record_generation(...)` or `startGeneration(...)` / `start_generation(...)`.
 - Tool invocations are tool children: `recordTool(...)` / `record_tool(...)` or `startTool(...)` / `start_tool(...)`.
 - Retrieval, ranking, planning, routing, and app logic are spans: `recordSpan(...)` / `record_span(...)` or `startSpan(...)` / `start_span(...)`.
@@ -107,6 +108,7 @@ Ask one focused clarification question only when the agent boundary or finalizat
 - Create one shared `Lemma` client on the server side.
 - Use `LEMMA_API_KEY` and `LEMMA_PROJECT_ID`. The default endpoint is `https://api.uselemma.ai`; pass `baseUrl` / `base_url` only for staging or self-hosted deployments.
 - Never expose `LEMMA_API_KEY` in browser code or `NEXT_PUBLIC_*` variables.
+- Never write the value of `LEMMA_API_KEY` into any file, tracked or not, and do not ask the user to paste it into the conversation. A placeholder line such as `LEMMA_API_KEY=` in an env example is fine. `LEMMA_PROJECT_ID` is not a secret; fill it in when you know it.
 - Use callback traces when one function owns the whole run.
 - In TypeScript, use trace handles when the run is coordinated across callbacks, streaming, or helpers; do not set final duration until `trace.end(...)`.
 - In Python, use callback traces as the root boundary and use `start_span`, `start_tool`, and `start_generation` on the active trace context for work in progress.
@@ -182,6 +184,10 @@ Validation checklist before considering an integration complete:
 - TypeScript trace handles are ended from the terminal callback, `finally` block, or job completion path.
 - Debug logs show `trace sent` and a final `spanCount` / `span_count` that matches the expected child records.
 - The dashboard trace shape matches the code path: root, generations, tools, spans, parent/child nesting, and thread/user context when expected.
+
+## Handing Back
+
+End by telling the user what to set before they run the app: `LEMMA_API_KEY`, an ingest-scoped key from the **Connect your agent** step in Lemma onboarding or from **Settings → API keys** in the dashboard, and `LEMMA_PROJECT_ID`. Nothing is sent until both are set. If the user arrived here from `lemma-artifacts`, the agent name you used is the one they chose in onboarding; say so, so they can see the two line up.
 
 ## Skill Feedback
 

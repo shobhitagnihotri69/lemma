@@ -338,6 +338,96 @@ describe("langChain", () => {
     });
   });
 
+  it("reads ls_model_name from run metadata for non-serializable chat models", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 201 }));
+    const h = handler(fetchMock);
+
+    h.handleChainStart(
+      { name: "agent" },
+      {},
+      "root",
+      undefined,
+      undefined,
+      { threadId: "t" },
+    );
+    h.handleChatModelStart(
+      {
+        lc: 1,
+        id: ["langchain_perplexity", "chat_models", "ChatPerplexity"],
+      },
+      [[{ role: "user", content: "hi" }]],
+      "llm",
+      "root",
+      {},
+      undefined,
+      { ls_model_name: "sonar-pro", ls_provider: "perplexity" },
+    );
+    await h.handleLLMEnd(
+      { generations: [[{ text: "ok", message: null }]] },
+      "llm",
+    );
+    await h.handleChainEnd({}, "root");
+
+    await h.flush();
+    const span = jsonBody(fetchMock.mock.calls[0]).trace.spans.find(
+      (s: { type?: string }) => s.type === "generation",
+    );
+    expect(span).toMatchObject({
+      model: "sonar-pro",
+      attributes: {
+        "llm.model_name": "sonar-pro",
+        "llm.provider": "perplexity",
+      },
+    });
+  });
+
+  it("reads ls_identity from run metadata when the class id is unknown", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 201 }));
+    const h = handler(fetchMock);
+
+    h.handleLLMStart(
+      { lc: 1, id: ["custom_pkg", "llms", "CustomLLM"] },
+      ["hello"],
+      "llm-meta",
+      undefined,
+      {},
+      undefined,
+      { ls_model_name: "custom-7b", ls_provider: "acme" },
+    );
+    await h.handleLLMEnd({ generations: [[{ text: "hi" }]] }, "llm-meta");
+
+    await h.flush();
+    expect(jsonBody(fetchMock.mock.calls[0]).trace.spans[0]).toMatchObject({
+      model: "custom-7b",
+      attributes: { "llm.provider": "acme" },
+    });
+  });
+
+  it("prefers serialized kwargs model over run metadata", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 201 }));
+    const h = handler(fetchMock);
+
+    h.handleChatModelStart(
+      {
+        id: ["langchain_openai", "chat_models", "ChatOpenAI"],
+        kwargs: { model: "gpt-4o" },
+      },
+      [[{ type: "human", content: "hi" }]],
+      "llm-kw",
+      undefined,
+      { model: "gpt-4o" },
+      undefined,
+      { ls_model_name: "sonar-pro" },
+    );
+    await h.handleLLMEnd({ generations: [[{ text: "ok" }]] }, "llm-kw");
+
+    await h.flush();
+    expect(jsonBody(fetchMock.mock.calls[0]).trace.spans[0]).toMatchObject({
+      model: "gpt-4o",
+      attributes: { "llm.provider": "openai" },
+    });
+  });
+
   it("omits usage when the provider did not supply token counts", async () => {
     const fetchMock = vi.fn(async () => new Response("{}", { status: 201 }));
     const h = handler(fetchMock);
@@ -810,6 +900,55 @@ describe("langChain", () => {
 
     await h.flush();
     expect(jsonBody(fetchMock.mock.calls[0]).trace.release).toBe("1.8.3");
+  });
+
+  it("records an explicit marker on successful None/null child chain and tool ends", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 201 }));
+    const h = handler(fetchMock, { agentName: "ProbeAgent" });
+
+    h.handleChainStart(
+      { name: "agent" },
+      { messages: [] },
+      "root",
+      undefined,
+      undefined,
+      { threadId: "t" },
+    );
+    h.handleChainStart({ name: "hook" }, {}, "hook", "root");
+    await h.handleChainEnd(null, "hook");
+    h.handleToolStart({ name: "log_event" }, "evt-1", "tool", "root");
+    await h.handleToolEnd(null, "tool");
+    h.handleChainStart({ name: "node_with_state" }, {}, "node", "root");
+    await h.handleChainEnd({}, "node");
+    await h.handleChainEnd({ messages: [] }, "root");
+
+    await h.flush();
+    const body = jsonBody(fetchMock.mock.calls[0]);
+    const spans = Object.fromEntries(
+      body.trace.spans.map((span: { name: string }) => [span.name, span]),
+    );
+    expect(spans.hook).toMatchObject({
+      type: "span",
+      output: { result: "none" },
+    });
+    expect(spans.log_event).toMatchObject({
+      type: "tool",
+      output: { result: "none" },
+    });
+    expect(spans.node_with_state.output).toEqual({});
+    expect(body.trace.output).toEqual({ messages: [] });
+  });
+
+  it("does not replace a root None end with a no-output marker", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 201 }));
+    const h = handler(fetchMock);
+
+    h.handleChainStart({ name: "agent" }, { messages: [] }, "root");
+    await h.handleChainEnd(null, "root");
+
+    await h.flush();
+    const body = jsonBody(fetchMock.mock.calls[0]);
+    expect(body.trace.output ?? null).toBeNull();
   });
 });
 

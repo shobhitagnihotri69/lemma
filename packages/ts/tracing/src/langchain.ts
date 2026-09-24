@@ -2,6 +2,7 @@ import {
   Lemma,
   type LemmaClientOptions,
   type SpanHandle,
+  type SpanOptions,
   type TraceHandle,
 } from "./client";
 import { describeError } from "./error-message";
@@ -346,9 +347,30 @@ function rootTraceInput(input: unknown): unknown {
   return input;
 }
 
+function textFromContentBlocks(content: unknown): string | undefined {
+  if (!Array.isArray(content)) return undefined;
+  const texts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const record = block as Record<string, unknown>;
+    if (record.type === "text" && typeof record.text === "string") {
+      texts.push(record.text);
+    }
+  }
+  return texts.length > 0 ? texts.join("\n") : undefined;
+}
+
+function flattenRootDisplay(value: unknown): unknown {
+  const display = textFromContentBlocks(value);
+  return display !== undefined ? display : value;
+}
+
 function rootTraceOutput(output: unknown): unknown {
   if (output == null) return output;
   if (typeof output === "string") return output;
+
+  const display = textFromContentBlocks(output);
+  if (display !== undefined) return display;
 
   if (output && typeof output === "object" && !Array.isArray(output)) {
     const record = output as Record<string, unknown>;
@@ -366,11 +388,11 @@ function rootTraceOutput(output: unknown): unknown {
     for (let i = messages.length - 1; i >= 0; i--) {
       const normalized = normalizeMessage(messages[i]);
       if (normalized.role === "assistant") {
-        return structuredAssistantOutput(normalized);
+        return flattenRootDisplay(structuredAssistantOutput(normalized));
       }
     }
-    return structuredAssistantOutput(
-      normalizeMessage(messages[messages.length - 1]),
+    return flattenRootDisplay(
+      structuredAssistantOutput(normalizeMessage(messages[messages.length - 1])),
     );
   }
 
@@ -379,9 +401,13 @@ function rootTraceOutput(output: unknown): unknown {
     for (const key of ["output", "answer", "result", "text", "content"]) {
       const value = record[key];
       if (typeof value === "string" && value) return value;
+      const fromBlocks = textFromContentBlocks(value);
+      if (fromBlocks !== undefined) return fromBlocks;
       if (value && typeof value === "object") {
         const nested = value as Record<string, unknown>;
         if (typeof nested.content === "string") return nested.content;
+        const nestedBlocks = textFromContentBlocks(nested.content);
+        if (nestedBlocks !== undefined) return nestedBlocks;
       }
     }
   }
@@ -535,12 +561,14 @@ function providerFromClassName(name: string): string | undefined {
 function llmProvider(
   serialized: Serialized | undefined,
   extraParams?: Record<string, unknown>,
+  metadata?: Record<string, unknown>,
 ): string | undefined {
   const kwargs = serialized?.kwargs;
   const sources: Array<Record<string, unknown> | undefined> = [
     kwargs,
     serialized as Record<string, unknown> | undefined,
     extraParams,
+    metadata,
   ];
   for (const source of sources) {
     if (!source) continue;
@@ -575,8 +603,36 @@ function llmProvider(
   return undefined;
 }
 
+function resolveGenerationIdentity(
+  serialized: Serialized | undefined,
+  extraParams?: Record<string, unknown>,
+  metadata?: Record<string, unknown>,
+): { provider?: string; model?: string } {
+  return {
+    provider: llmProvider(serialized, extraParams, metadata),
+    model:
+      pickModelIdentity(serialized?.kwargs) ??
+      pickModelIdentity(serialized) ??
+      pickModelIdentity(extraParams) ??
+      pickModelIdentity(metadata),
+  };
+}
+
 function durationMs(start: Date, end: Date) {
   return Math.max(0, end.getTime() - start.getTime());
+}
+
+const NO_OUTPUT = { result: "none" } as const;
+
+function recordedSpanOutput(
+  output: unknown,
+  ownsTrace: boolean,
+  status?: SpanOptions["status"],
+): unknown {
+  if (output == null && !ownsTrace && status !== "ERROR") {
+    return { ...NO_OUTPUT };
+  }
+  return output;
 }
 
 function langchainAttributes(
@@ -848,6 +904,17 @@ export class LemmaLangChainCallbackHandler {
     }
   }
 
+  private endStoredRun(
+    run: StoredRun,
+    options: Omit<SpanOptions, "id" | "name" | "type" | "startedAt">,
+  ) {
+    if (!run.handle) return;
+    run.handle.end({
+      ...options,
+      output: recordedSpanOutput(options.output, run.ownsTrace, options.status),
+    });
+  }
+
   private async finalizeTrace(owningTraceId: string, stored: StoredTrace) {
     this.traces.delete(owningTraceId);
     this.forgetTraceRuns(owningTraceId);
@@ -997,13 +1064,11 @@ export class LemmaLangChainCallbackHandler {
     const endedAt = new Date();
     const stored = this.storedTrace(run.owningTraceId);
 
-    if (run.handle) {
-      run.handle.end({
-        output: outputs,
-        endedAt,
-        durationMs: durationMs(run.startedAt, endedAt),
-      });
-    }
+    this.endStoredRun(run, {
+      output: outputs,
+      endedAt,
+      durationMs: durationMs(run.startedAt, endedAt),
+    });
 
     if (stored) {
       this.noteBounds(stored, run.startedAt, endedAt);
@@ -1025,14 +1090,12 @@ export class LemmaLangChainCallbackHandler {
     const message = describeError(error);
     const stored = this.storedTrace(run.owningTraceId);
 
-    if (run.handle) {
-      run.handle.end({
-        status: "ERROR",
-        error: message,
-        endedAt,
-        durationMs: durationMs(run.startedAt, endedAt),
-      });
-    }
+    this.endStoredRun(run, {
+      status: "ERROR",
+      error: message,
+      endedAt,
+      durationMs: durationMs(run.startedAt, endedAt),
+    });
 
     if (stored) {
       this.noteBounds(stored, run.startedAt, endedAt);
@@ -1076,11 +1139,11 @@ export class LemmaLangChainCallbackHandler {
     this.applyIdentity(attachment.stored, metadata, tags);
     this.noteBounds(attachment.stored, startedAt, undefined);
 
-    const provider = llmProvider(serialized, extraParams);
-    const model =
-      pickModelIdentity(serialized?.kwargs) ??
-      pickModelIdentity(serialized) ??
-      pickModelIdentity(extraParams);
+    const { provider, model } = resolveGenerationIdentity(
+      serialized,
+      extraParams,
+      metadata,
+    );
     const handle = attachment.stored.handle.startGeneration({
       name: serializedName(serialized, "langchain-llm"),
       parentId: attachment.parentId,
@@ -1136,11 +1199,11 @@ export class LemmaLangChainCallbackHandler {
     this.applyIdentity(attachment.stored, metadata, tags);
     this.noteBounds(attachment.stored, startedAt, undefined);
 
-    const provider = llmProvider(serialized, extraParams);
-    const model =
-      pickModelIdentity(serialized?.kwargs) ??
-      pickModelIdentity(serialized) ??
-      pickModelIdentity(extraParams);
+    const { provider, model } = resolveGenerationIdentity(
+      serialized,
+      extraParams,
+      metadata,
+    );
     const handle = attachment.stored.handle.startGeneration({
       name: serializedName(serialized, "langchain-chat-model"),
       parentId: attachment.parentId,
@@ -1188,7 +1251,7 @@ export class LemmaLangChainCallbackHandler {
     const awaitingTools = !softError && hasToolCalls(structured);
 
     const model = pickGenerationModelIdentity(output);
-    run.handle.end({
+    this.endStoredRun(run, {
       output: softError ? undefined : structured,
       error: softError ?? undefined,
       status: softError ? "ERROR" : undefined,
@@ -1252,7 +1315,7 @@ export class LemmaLangChainCallbackHandler {
     const endedAt = new Date();
     const message = describeError(error);
 
-    run.handle?.end({
+    this.endStoredRun(run, {
       status: "ERROR",
       error: message,
       endedAt,
@@ -1330,14 +1393,14 @@ export class LemmaLangChainCallbackHandler {
     const softError = toolResultError(output);
 
     if (softError) {
-      run.handle?.end({
+      this.endStoredRun(run, {
         status: "ERROR",
         error: softError,
         endedAt,
         durationMs: durationMs(run.startedAt, endedAt),
       });
     } else {
-      run.handle?.end({
+      this.endStoredRun(run, {
         output,
         endedAt,
         durationMs: durationMs(run.startedAt, endedAt),
@@ -1363,7 +1426,7 @@ export class LemmaLangChainCallbackHandler {
     const endedAt = new Date();
     const message = describeError(error);
 
-    run.handle?.end({
+    this.endStoredRun(run, {
       status: "ERROR",
       error: message,
       endedAt,
@@ -1436,7 +1499,7 @@ export class LemmaLangChainCallbackHandler {
     if (!run) return;
     const endedAt = new Date();
 
-    run.handle?.end({
+    this.endStoredRun(run, {
       output: documents,
       endedAt,
       durationMs: durationMs(run.startedAt, endedAt),
@@ -1458,7 +1521,7 @@ export class LemmaLangChainCallbackHandler {
     const endedAt = new Date();
     const message = describeError(error);
 
-    run.handle?.end({
+    this.endStoredRun(run, {
       status: "ERROR",
       error: message,
       endedAt,

@@ -3,6 +3,8 @@ title: "Turning issues into fixes"
 description: "Triage a production issue, inspect the evidence, ship a change, and confirm it does not recur"
 meta:
   contentType: "How-to"
+  goal: "Walk one production issue from evidence through a shipped fix and a recurrence check"
+  audience: "People taking a Lemma issue to a code change"
 ---
 
 Lemma groups repeated [trace](/platform/concepts#trace) evidence into an [issue](/platform/concepts#issue). This how-to takes that finding to a code change you can prove. Triage first. Then find the mechanism. Then change the code and verify. Do not start a patch until you can point at the supporting traces that show the defect.
@@ -24,7 +26,7 @@ Lemma groups repeated [trace](/platform/concepts#trace) evidence into an [issue]
   Lemma’s detection is probabilistic. An issue title is a hypothesis backed by traces, not a confirmed bug. Open the evidence before you treat the title as ground truth. See [Issues](/platform/issues) and [Product boundaries](/platform/concepts#product-boundaries).
 </Info>
 
-## Workflow
+## Triage, investigate, ship, and verify
 
 <Steps>
   <Step title="Review the issue">

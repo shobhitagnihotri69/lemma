@@ -1,6 +1,10 @@
 ---
 title: "Trace contract"
 description: "What clients send to Lemma, what ingest requires, and which fields unlock product behavior"
+meta:
+  contentType: "Reference"
+  goal: "Specify what ingest accepts and which fields unlock product behavior"
+  audience: "Engineers and coding agents implementing or debugging ingest"
 ---
 
 Lemma traces are JSON trees delivered to `POST /traces/ingest`. A **trace** is one agent execution: the root record carries the current input, final output or error, agent name, optional thread/user context, and timing. All other work is **child spans** in `trace.spans[]`, typed as `span`, `generation`, or `tool`, optionally nested via `parent_id`.
@@ -97,15 +101,20 @@ Ingest accepts a name-only trace. Semantic fields are not HTTP-required, but wit
 | `trace.name` | Required non-empty string |
 | `trace.spans[].name` | Required non-empty string for each span |
 | Span `id` values | Must be unique within the payload when provided |
+| `status` | Exact `"OK"` or `"ERROR"` on the trace or a span. Ingest ignores any other value |
 | Authorization | Required; missing credentials return `401` |
 
 Successful ingest returns **201**. Invalid shape returns **400**. Missing `trace.id` or span `id` values are generated server-side. Missing or invalid `spans[].type` defaults to `"span"`. Missing `parent_id` attaches the child under the synthetic root.
+
+Ingest stores `"OK"` or `"ERROR"` on the trace and on each span. Ingest ignores every other value, including `"UNSET"`, `"ok"`, and `null`, and returns **201**. Ingest stores an omitted status as unset. A non-empty `error` forces `ERROR` on the trace or span that contains it, even when `status` is `"OK"`.
+
+When the tracing SDKs build the payload, they omit root `status` on success and send `"ERROR"` on failure.
 
 ### Delivery and retries
 
 Deliver **one complete trace** when the execution (agent turn) finishes. This is required; patching a trace over time is not currently supported. Treat `ingest` as a single delivery, not an incremental merge API.
 
-- **Required:** one complete delivery per execution — root input/output, thread/user, and all child spans in one payload, sent when the turn is done.
+- **Required:** one complete delivery per execution: root input/output, thread/user, and all child spans in one payload, sent when the turn is done.
 - **Retries:** re-sending the same payload with the same span IDs is idempotent; spans whose IDs already exist are skipped.
 - **Not a merge API:** omitted root fields do **not** preserve prior values. There is no field-level upsert, and patching a trace across calls is not supported.
 - **Processing:** after an idle window Lemma processes the trace once; a later successful re-delivery does not restart `processTrace` / `extractSignals`. Late new span IDs may still append for display.
@@ -120,7 +129,7 @@ Deliver **one complete trace** when the execution (agent turn) finishes. This is
 | `name` | Agent / workflow name used for grouping and filtering |
 | `input` | Current user turn or execution entry point |
 | `output` | Final answer on success |
-| `error` / `status` | Failure message and `ERROR` status when the run fails |
+| `error` / `status` | Failure message, plus exact `"OK"` or `"ERROR"`. Ingest ignores any other status and returns **201**. A non-empty `error` forces `ERROR`. Ingest stores an omitted status as unset |
 | `started_at` / `ended_at` / `duration_ms` | Trace timing |
 | `thread_id` | Groups multi-turn conversation traces |
 | `user_id` | Per-user slicing |
@@ -143,7 +152,7 @@ Every child is a named object in `trace.spans[]`.
 | `name` | Human-readable operation name |
 | `type` | `"span"`, `"generation"`, or `"tool"` |
 | `input` / `output` | Operation arguments and result |
-| `error` / `status` | Failure details; prefer these over inventing an output |
+| `error` / `status` | Same `"OK"` and `"ERROR"` rule as the trace record. Prefer `error` over inventing an output |
 | `started_at` / `ended_at` / `duration_ms` | Timing |
 | `model` | Generation model name |
 | `usage` | Token counts when the provider supplied them (omit when unknown) |
@@ -177,10 +186,10 @@ support-agent              ← trace record
 
 Prefer both:
 
-- `input` — the prompt payload for that call
-- `llmInputMessages` / `llm_input_messages` — structured messages flattened into `llm.input_messages.{index}.message.*`
+- `input`: the prompt payload for that call
+- `llmInputMessages` / `llm_input_messages`: structured messages flattened into `llm.input_messages.{index}.message.*`
 
-`model` is the primary model identifier. Native generation props such as `llmProvider`, `llmInvocationParameters`, and `llmOutputMessages` populate OpenInference-style attributes. Pass `usage` (camelCase in TypeScript, snake_case kwargs in Python) when the provider returns token counts — see [Token usage](#token-usage).
+`model` is the primary model identifier. Native generation props such as `llmProvider`, `llmInvocationParameters`, and `llmOutputMessages` populate OpenInference-style attributes. Pass `usage` (camelCase in TypeScript, snake_case kwargs in Python) when the provider returns token counts: see [Token usage](#token-usage).
 
 ## Token usage
 
@@ -209,7 +218,7 @@ Healthy zero ≠ missing instrumentation. Analytics uses absence vs explicit zer
 
 All fields are optional. Only include fields the provider actually returned.
 
-### TypeScript DX
+### TypeScript
 
 ```typescript
 trace.recordGeneration({
@@ -226,7 +235,7 @@ trace.recordGeneration({
 });
 ```
 
-### Python DX
+### Python
 
 ```python
 trace.record_generation(
@@ -244,20 +253,20 @@ trace.record_generation(
 
 The SDK also flattens usage into span attributes using OTel GenAI names (`gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_creation.input_tokens`, `gen_ai.usage.reasoning.output_tokens`) plus OpenInference compatibility keys (`llm.token_count.prompt`, `llm.token_count.completion`).
 
-Do **not** derive user-facing aggregates or estimated cost in the SDK — the backend computes windowed Analytics quantities from this source telemetry.
+Do **not** derive user-facing aggregates or estimated cost in the SDK: the backend computes windowed Analytics quantities from this source telemetry.
 
 ## Tools
 
 Tool spans should carry:
 
-- `name` — stable tool identifier
-- `input` — arguments
-- `output` or `error` — result or failure
+- `name`: stable tool identifier
+- `input`: arguments
+- `output` or `error`: result or failure
 - optional `toolParameters` / `tool_parameters` for the schema
 
 Ingest uses `tool_name` when present, otherwise the span `name`, and normalizes tool I/O into tool-call aliases for display.
 
-## Errors
+## Record failures
 
 Record a failure on the exact span, generation, or tool where it happened:
 
@@ -302,7 +311,7 @@ For callback traces, uncaught exceptions automatically fail the root. If you cat
   </Tab>
 </Tabs>
 
-## Timing
+## Measure duration
 
 Duration resolution order:
 
@@ -336,7 +345,8 @@ Clients send first-class JSON fields. Ingest generates display and analysis alia
 | `model` | `gen_ai.request.model`, `ai.model.id`, `model_name` |
 | generation `input` / `output` | `input.value` / `output.value` |
 | tool `input` / `output` | `input.value`, `output.value`, `ai.toolCall.args`, `ai.toolCall.result` |
-| `error` | `error.message`, error status |
+| `error` | `error.message`. A non-empty value forces `ERROR` |
+| `status` | `OK` or `ERROR`; otherwise unset |
 | native props / `attributes` | Flattened OpenInference-style attribute keys |
 
 Do not hand-build the normalized aliases unless you are bypassing the SDK. Prefer native SDK props and first-class fields.
@@ -466,7 +476,7 @@ These are Lemma-specific extensions (not OpenTelemetry GenAI canonical names).
 
 Complete, correctly typed trees improve classification and automated issue extraction. Root I/O, model fields, and tool payloads are **not** general ingest gates. Some environments may further restrict issue extraction to specific framework shapes; treat that as an environment policy, not as the base SDK contract.
 
-## Privacy
+## Redact before ingest
 
 Redact secrets, credentials, and sensitive user data before tracing them. Framework integrations always record inputs, outputs, and error messages: without them a trace cannot show what a run consumed, produced, or why it failed.
 
